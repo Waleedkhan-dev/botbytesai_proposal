@@ -1,0 +1,197 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 13% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 13% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 13% 15%;
+
+    --primary: 263 70% 58%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 263 76% 50%;
+
+    --secondary: 263 70% 90%;
+    --secondary-foreground: 263 70% 58%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 263 70% 75%;
+    --accent-foreground: 263 70% 20%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 160 84% 39%;
+    --success-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 263 70% 58%;
+
+    --radius: 0.5rem;
+
+    /* Text colors */
+    --text-primary: 220 13% 18%;
+    --text-secondary: 220 9% 35%;
+    --text-muted: 220 9% 46%;
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 263 70% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 263 70% 96%;
+    --sidebar-accent-foreground: 263 70% 30%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 263 70% 58%;
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 10%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 263 70% 65%;
+    --primary-foreground: 222 47% 8%;
+
+    --secondary: 263 40% 20%;
+    --secondary-foreground: 263 70% 75%;
+
+    --muted: 217 32% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 263 50% 25%;
+    --accent-foreground: 263 70% 85%;
+
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 32% 17%;
+    --input: 217 32% 17%;
+    --ring: 263 70% 65%;
+
+    --sidebar-background: 222 47% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 263 70% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 263 40% 20%;
+    --sidebar-accent-foreground: 263 70% 85%;
+    --sidebar-border: 217 32% 17%;
+    --sidebar-ring: 263 70% 65%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Proposal content styling */
+  .proposal-content h1 {
+    @apply text-3xl md:text-4xl font-bold mb-6 leading-tight;
+    color: hsl(var(--text-primary));
+  }
+
+  .proposal-content h2 {
+    @apply text-xl md:text-2xl font-semibold mb-4 leading-snug;
+    color: hsl(var(--primary));
+  }
+
+  .proposal-content p {
+    @apply text-base md:text-lg leading-relaxed mb-4;
+    color: hsl(var(--text-secondary));
+  }
+
+  .proposal-content ul,
+  .proposal-content ol {
+    @apply ml-6 mb-4 space-y-2;
+  }
+
+  .proposal-content ul {
+    @apply list-disc;
+  }
+
+  .proposal-content ol {
+    @apply list-decimal;
+  }
+
+  .proposal-content li {
+    @apply text-base md:text-lg leading-relaxed;
+    color: hsl(var(--text-secondary));
+  }
+
+  .proposal-content li::marker {
+    color: hsl(var(--primary));
+  }
+
+  .proposal-content strong {
+    @apply font-semibold;
+    color: hsl(var(--text-primary));
+  }
+}
+
+@layer utilities {
+  .animate-subtle-pulse {
+    animation: subtle-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes subtle-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.4);
+    }
+    50% {
+      box-shadow: 0 0 0 8px hsl(var(--primary) / 0);
+    }
+  }
+
+  .slide-enter {
+    animation: slide-enter 0.4s ease-out;
+  }
+
+  @keyframes slide-enter {
+    from {
+      opacity: 0;
+      transform: translateX(100px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .slide-exit {
+    animation: slide-exit 0.4s ease-out;
+  }
+
+  @keyframes slide-exit {
+    from {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateX(-100px);
+    }
+  }
+}
