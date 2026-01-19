@@ -54,33 +54,20 @@ const Index = () => {
             console.log(`✅ Added share_url for proposal ${p.id}`);
           }
         } else {
-          // No share_id: create a copy (no client name) to generate a new share_id and then set its share_url
-          const { data: copy, error: copyError } = await supabase
+          // No share_id: generate one client-side and update
+          const shareId = crypto.randomUUID();
+          const shareUrl = generateShareUrl(shareId);
+          
+          const { error: updateError } = await supabase
             .from("PROPOSAL")
-            .insert({
-              "PROPOSAL DATA": p["PROPOSAL DATA"],
-              STATUS: "draft",
-              client_name: null,
-              is_published: false,
-            })
-            .select("*")
-            .single();
+            .update({ share_id: shareId, share_url: shareUrl })
+            .eq("id", p.id);
 
-          if (copyError) {
-            console.error("❌ Error creating copy to generate share_id:", copyError.message);
+          if (updateError) {
+            console.error("❌ Error updating share_id/share_url:", updateError.message);
           } else {
-            const shareUrl = generateShareUrl(copy.share_id);
-            const { error: updateError } = await supabase
-              .from("PROPOSAL")
-              .update({ share_url: shareUrl })
-              .eq("id", copy.id);
-
-            if (updateError) {
-              console.error("❌ Error updating new copy share_url:", updateError.message);
-            } else {
-              didUpdate = true;
-              console.log(`✅ Created copy ${copy.id} and set share_url`);
-            }
+            didUpdate = true;
+            console.log(`✅ Generated share_id and share_url for proposal ${p.id}`);
           }
         }
       } catch (err: any) {
@@ -171,6 +158,7 @@ const Index = () => {
     return `${baseUrl}/proposal/${shareId}`;
   };
 
+  // ✅ FIXED: Generate share_id and share_url BEFORE inserting
   const createProposal = async () => {
     if (!proposalData.trim()) {
       alert("Please enter proposal data");
@@ -180,7 +168,11 @@ const Index = () => {
     setIsCreating(true);
 
     try {
-      // Insert the proposal
+      // Generate share_id and share_url on client side BEFORE insert
+      const shareId = crypto.randomUUID();
+      const shareUrl = generateShareUrl(shareId);
+
+      // Insert the proposal with share_id and share_url already set
       const { data, error } = await supabase
         .from("PROPOSAL")
         .insert({
@@ -188,28 +180,18 @@ const Index = () => {
           STATUS: "draft",
           client_name: clientName || null,
           is_published: false,
+          share_id: shareId,
+          share_url: shareUrl,
         })
         .select("*")
         .single();
 
       if (error) throw error;
 
-      // Generate and update the share URL
-      const shareUrl = generateShareUrl(data.share_id);
-
-      const { data: updatedData, error: updateError } = await supabase
-        .from("PROPOSAL")
-        .update({ share_url: shareUrl })
-        .eq("id", data.id)
-        .select("*")
-        .single();
-
-      if (updateError) throw updateError;
-
-      console.log("✅ Proposal created:", updatedData);
+      console.log("✅ Proposal created:", data);
       setNewProposalUrl(shareUrl);
 
-      // Refresh the list
+      // Refresh the list - URL will already be there!
       fetchProposals();
 
       // Clear form
@@ -224,12 +206,16 @@ const Index = () => {
     setIsCreating(false);
   };
 
+  // ✅ FIXED: Generate share_id and share_url BEFORE inserting
   const createProposalCopy = async (originalProposal: Proposal, clientName?: string) => {
-    // Create a copy automatically without prompting. We intentionally don't use a client name.
     setIsCreating(true);
 
     try {
-      // Create a new copy (client_name will be null unless explicitly provided)
+      // Generate share_id and share_url on client side BEFORE insert
+      const shareId = crypto.randomUUID();
+      const shareUrl = generateShareUrl(shareId);
+
+      // Create a new copy with share_id and share_url already set
       const { data, error } = await supabase
         .from("PROPOSAL")
         .insert({
@@ -237,36 +223,37 @@ const Index = () => {
           STATUS: "draft",
           client_name: clientName || null,
           is_published: false,
+          share_id: shareId,
+          share_url: shareUrl,
         })
         .select("*")
         .single();
 
       if (error) throw error;
 
-      // Generate and update the share URL
-      const shareUrl = generateShareUrl(data.share_id);
-
-      const { error: updateError } = await supabase
-        .from("PROPOSAL")
-        .update({ share_url: shareUrl })
-        .eq("id", data.id);
-
-      if (updateError) throw updateError;
-
-      console.log("✅ Proposal copy created (auto)");
+      console.log("✅ Proposal copy created with URL:", shareUrl);
 
       // Copy to clipboard and notify
       try {
         await navigator.clipboard.writeText(shareUrl);
+        // Show success notification
+        await Swal.fire({
+          icon: 'success',
+          title: 'Copy Created!',
+          text: 'Share link copied to clipboard',
+          timer: 2000,
+          showConfirmButton: false,
+        });
       } catch (_) {
         // ignore clipboard errors in non-secure contexts
       }
 
-      // Refresh the list
+      // Refresh the list - URL will already be there!
       fetchProposals();
 
     } catch (err: any) {
       console.error("❌ Error creating copy:", err.message || err);
+      await Swal.fire({ icon: 'error', title: 'Error', text: err.message });
     }
 
     setIsCreating(false);
@@ -400,10 +387,15 @@ const Index = () => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => createProposalCopy(proposal)}
-                        className="p-2 hover:bg-secondary rounded-lg transition-colors"
+                        disabled={isCreating}
+                        className="p-2 hover:bg-secondary rounded-lg transition-colors disabled:opacity-50"
                         title="Create copy for new client"
                       >
-                        <Plus className="w-5 text-red-600 h-5  text-" />
+                        {isCreating ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                        ) : (
+                          <Plus className="w-5 text-red-600 h-5" />
+                        )}
                       </button>
 
                       {proposal.share_url && (
