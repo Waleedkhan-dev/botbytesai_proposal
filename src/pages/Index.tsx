@@ -1,7 +1,7 @@
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { FileText, ArrowRight, Sparkles, Loader2, Plus, Copy, Check, ExternalLink, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import Swal from 'sweetalert2';
 
@@ -20,114 +20,110 @@ const Index = () => {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [creatingId, setCreatingId] = useState<number | null>(null);
 
 
 
-  // Modal state for creating new proposal
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [clientName, setClientName] = useState("");
-  const [proposalData, setProposalData] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
-  const [newProposalUrl, setNewProposalUrl] = useState<string | null>(null);
-
-  const ensureShareUrls = async (fetchedProposals: Proposal[]) => {
-    // For any proposal missing a share_url, try to fix it automatically.
-    // If the row already has a share_id we just compute the URL and update the same row.
-    // If neither share_id nor share_url exist (rare), we create a copy (no client name) to generate a new share_id + url.
-    let didUpdate = false;
-
-    for (const p of fetchedProposals || []) {
-      if (p.share_url) continue;
-
-      try {
-        if (p.share_id) {
-          const shareUrl = generateShareUrl(p.share_id);
-          const { error: updateError } = await supabase
-            .from("PROPOSAL")
-            .update({ share_url: shareUrl })
-            .eq("id", p.id);
-
-          if (updateError) {
-            console.error("❌ Error updating share_url:", updateError.message);
-          } else {
-            didUpdate = true;
-            console.log(`✅ Added share_url for proposal ${p.id}`);
-          }
-        } else {
-          // No share_id: generate one client-side and update
-          const shareId = crypto.randomUUID();
-          const shareUrl = generateShareUrl(shareId);
-          
-          const { error: updateError } = await supabase
-            .from("PROPOSAL")
-            .update({ share_id: shareId, share_url: shareUrl })
-            .eq("id", p.id);
-
-          if (updateError) {
-            console.error("❌ Error updating share_id/share_url:", updateError.message);
-          } else {
-            didUpdate = true;
-            console.log(`✅ Generated share_id and share_url for proposal ${p.id}`);
-          }
-        }
-      } catch (err: any) {
-        console.error("❌ Error ensuring share_url:", err.message || err);
-      }
-    }
-
-    return didUpdate;
+  const generateShareUrl = (shareId: string): string => {
+    const baseUrl = window.location.origin;
+    return `${baseUrl}/proposal/${shareId}`;
   };
 
-  const fetchProposals = async () => {
-    setIsLoading(true);
-    setError(null);
+  // Initial fetch
+  const fetchProposals = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("PROPOSAL")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
 
-    const { data, error } = await supabase
-      .from("PROPOSAL")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(10);
-
-    if (error) {
-      console.error("❌ Supabase error:", error.message);
-      setError(error.message);
-      setProposals([]);
-    } else {
-      console.log("✅ Proposals fetched:", data);
-      setProposals(data || []);
-
-      // Auto-generate missing share URLs (no prompts or clicks)
-      try {
-        const didUpdate = await ensureShareUrls(data || []);
-        if (didUpdate) {
-          // Re-fetch once to pick up updates
-          const { data: refreshed, error: refreshError } = await supabase
-            .from("PROPOSAL")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(10);
-
-          if (!refreshError) {
-            setProposals(refreshed || []);
-            console.log("🔁 Refreshed proposals after ensuring share URLs");
-          }
-        }
-      } catch (err: any) {
-        console.error("❌ Error running ensureShareUrls:", err.message || err);
+      if (error) {
+        console.error("❌ Supabase error:", error.message);
+        setError(error.message);
+        setProposals([]);
+      } else {
+        console.log("✅ Proposals fetched:", data?.length);
+        setProposals(data || []);
       }
+    } catch (err: any) {
+      console.error("❌ Error fetching:", err.message);
+      setError(err.message);
     }
-
     setIsLoading(false);
-  };
-
-  useEffect(() => {
-    fetchProposals();
   }, []);
+
+  // ✅ REALTIME SUBSCRIPTION - Auto-updates without refresh
+  useEffect(() => {
+    // Initial fetch
+    fetchProposals();
+
+    // Subscribe to realtime changes
+    const channel = supabase
+      .channel('proposals-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'PROPOSAL',
+        },
+        (payload) => {
+          console.log('✅ REALTIME INSERT:', payload.new);
+          const newProposal = payload.new as Proposal;
+          // Add new proposal to the top of the list
+          setProposals((prev) => {
+            // Avoid duplicates
+            if (prev.some(p => p.id === newProposal.id)) return prev;
+            return [newProposal, ...prev];
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'PROPOSAL',
+        },
+        (payload) => {
+          console.log('✅ REALTIME UPDATE:', payload.new);
+          const updatedProposal = payload.new as Proposal;
+          // Update the proposal in the list
+          setProposals((prev) =>
+            prev.map((p) => (p.id === updatedProposal.id ? updatedProposal : p))
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'PROPOSAL',
+        },
+        (payload) => {
+          console.log('✅ REALTIME DELETE:', payload.old);
+          const deletedId = (payload.old as Proposal).id;
+          // Remove from list
+          setProposals((prev) => prev.filter((p) => p.id !== deletedId));
+        }
+      )
+      .subscribe((status) => {
+        console.log('📡 Realtime subscription status:', status);
+      });
+
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('🔌 Unsubscribing from realtime');
+      supabase.removeChannel(channel);
+    };
+  }, [fetchProposals]);
 
   const deleteProposal = async (id: number) => {
     const result = await Swal.fire({
       title: 'Delete proposal?',
-      text: 'Are you sure you want to delete this proposal? This action cannot be undone.',
+      text: 'This action cannot be undone.',
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#dc2626',
@@ -139,89 +135,86 @@ const Index = () => {
     if (!result.isConfirmed) return;
 
     try {
+      // Optimistic update - remove immediately
+      setProposals(prev => prev.filter(p => p.id !== id));
+
       const { error } = await supabase.from('PROPOSAL').delete().eq('id', id);
+
       if (error) {
-        console.error('❌ Error deleting proposal:', error.message);
+        console.error('❌ Error deleting:', error.message);
         await Swal.fire({ icon: 'error', title: 'Delete failed', text: error.message });
+        fetchProposals(); // Revert on error
         return;
       }
-      await Swal.fire({ icon: 'success', title: 'Deleted', text: 'Proposal deleted' });
-      fetchProposals();
+
+      await Swal.fire({
+        icon: 'success',
+        title: 'Deleted',
+        timer: 1500,
+        showConfirmButton: false
+      });
     } catch (err: any) {
-      console.error('❌ Error deleting proposal:', err.message);
-      await Swal.fire({ icon: 'error', title: 'Delete failed', text: err.message });
+      console.error('❌ Error:', err.message);
+      await Swal.fire({ icon: 'error', title: 'Error', text: err.message });
+      fetchProposals();
     }
   };
 
-  const generateShareUrl = (shareId: string): string => {
-    const baseUrl = window.location.origin;
-    return `${baseUrl}/proposal/${shareId}`;
+
+
+  // Generate missing share links for existing proposals
+  const generateMissingLinks = async () => {
+    try {
+      const proposalsWithoutLinks = proposals.filter(p => !p.share_id || !p.share_url);
+
+      if (proposalsWithoutLinks.length === 0) {
+        alert("All proposals have shareable links!");
+        return;
+      }
+
+      console.log(`🔄 Generating links for ${proposalsWithoutLinks.length} proposals...`);
+
+      for (const proposal of proposalsWithoutLinks) {
+        const shareId = crypto.randomUUID();
+        const shareUrl = generateShareUrl(shareId);
+
+        const { error } = await supabase
+          .from("PROPOSAL")
+          .update({
+            share_id: shareId,
+            share_url: shareUrl,
+          })
+          .eq("id", proposal.id);
+
+        if (error) {
+          console.error(`❌ Error updating proposal ${proposal.id}:`, error);
+        } else {
+          console.log(`✅ Link generated for proposal ${proposal.id}`);
+        }
+      }
+
+      // Refresh proposals
+      await fetchProposals();
+      alert(`✅ Generated links for ${proposalsWithoutLinks.length} proposals!`);
+    } catch (err: any) {
+      console.error("❌ Error:", err.message);
+      alert("Error: " + err.message);
+    }
   };
 
-  // ✅ FIXED: Generate share_id and share_url BEFORE inserting
-  const createProposal = async () => {
-    if (!proposalData.trim()) {
-      alert("Please enter proposal data");
-      return;
-    }
-
-    setIsCreating(true);
+  const createProposalCopy = async (originalProposal: Proposal) => {
+    setCreatingId(originalProposal.id);
 
     try {
-      // Generate share_id and share_url on client side BEFORE insert
       const shareId = crypto.randomUUID();
       const shareUrl = generateShareUrl(shareId);
 
-      // Insert the proposal with share_id and share_url already set
-      const { data, error } = await supabase
-        .from("PROPOSAL")
-        .insert({
-          "PROPOSAL DATA": proposalData,
-          STATUS: "draft",
-          client_name: clientName || null,
-          is_published: false,
-          share_id: shareId,
-          share_url: shareUrl,
-        })
-        .select("*")
-        .single();
-
-      if (error) throw error;
-
-      console.log("✅ Proposal created:", data);
-      setNewProposalUrl(shareUrl);
-
-      // Refresh the list - URL will already be there!
-      fetchProposals();
-
-      // Clear form
-      setClientName("");
-      setProposalData("");
-
-    } catch (err: any) {
-      console.error("❌ Error creating proposal:", err.message);
-      alert("Error creating proposal: " + err.message);
-    }
-
-    setIsCreating(false);
-  };
-
-  // ✅ FIXED: Generate share_id and share_url BEFORE inserting
-  const createProposalCopy = async (originalProposal: Proposal, clientName?: string) => {
-    setIsCreating(true);
-
-    try {
-      // Generate share_id and share_url on client side BEFORE insert
-      const shareId = crypto.randomUUID();
-      const shareUrl = generateShareUrl(shareId);
-
-      // Create a new copy with share_id and share_url already set
       const { data, error } = await supabase
         .from("PROPOSAL")
         .insert({
           "PROPOSAL DATA": originalProposal["PROPOSAL DATA"],
           STATUS: "draft",
-          client_name: clientName || null,
+          client_name: null,
           is_published: false,
           share_id: shareId,
           share_url: shareUrl,
@@ -231,39 +224,51 @@ const Index = () => {
 
       if (error) throw error;
 
-      console.log("✅ Proposal copy created with URL:", shareUrl);
+      console.log("✅ Copy created:", data);
 
-      // Copy to clipboard and notify
+      // Optimistic update (realtime will also trigger)
+      setProposals(prev => {
+        if (prev.some(p => p.id === data.id)) return prev;
+        return [data, ...prev];
+      });
+
+      // Copy to clipboard
       try {
         await navigator.clipboard.writeText(shareUrl);
-        // Show success notification
         await Swal.fire({
           icon: 'success',
           title: 'Copy Created!',
-          text: 'Share link copied to clipboard',
-          timer: 2000,
+          html: `<p>Link copied to clipboard:</p><code style="font-size: 11px; word-break: break-all;">${shareUrl}</code>`,
+          timer: 2500,
           showConfirmButton: false,
         });
       } catch (_) {
-        // ignore clipboard errors in non-secure contexts
+        await Swal.fire({
+          icon: 'success',
+          title: 'Copy Created!',
+          html: `<code style="font-size: 11px; word-break: break-all;">${shareUrl}</code>`,
+          timer: 2500,
+          showConfirmButton: false,
+        });
       }
 
-      // Refresh the list - URL will already be there!
-      fetchProposals();
-
     } catch (err: any) {
-      console.error("❌ Error creating copy:", err.message || err);
+      console.error("❌ Error:", err.message);
       await Swal.fire({ icon: 'error', title: 'Error', text: err.message });
     }
 
-    setIsCreating(false);
+    setCreatingId(null);
   };
 
   const copyShareLink = async (proposal: Proposal) => {
     if (proposal.share_url) {
-      await navigator.clipboard.writeText(proposal.share_url);
-      setCopiedId(proposal.id);
-      setTimeout(() => setCopiedId(null), 2000);
+      try {
+        await navigator.clipboard.writeText(proposal.share_url);
+        setCopiedId(proposal.id);
+        setTimeout(() => setCopiedId(null), 2000);
+      } catch (err) {
+        console.error("Copy failed:", err);
+      }
     }
   };
 
@@ -280,14 +285,11 @@ const Index = () => {
               BOTBYTES
             </span>
           </div>
-
-          {/* <button
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            New Proposal
-          </button> */}
+          {/* Realtime indicator */}
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            Live
+          </div>
         </div>
       </header>
 
@@ -318,12 +320,19 @@ const Index = () => {
           </motion.div>
 
           {/* Proposals List */}
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-          >
-            <h2 className="text-2xl font-bold text-foreground mb-6">Your Proposals</h2>
+          <div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-foreground">Your Proposals</h2>
+              {proposals.some(p => !p.share_id || !p.share_url) && (
+                <button
+                  onClick={generateMissingLinks}
+                  className="px-3 py-2 text-sm bg-yellow-100 text-yellow-800 rounded-lg hover:bg-yellow-200 transition-colors"
+                  title="Generate missing share links"
+                >
+                  🔗 Generate Links
+                </button>
+              )}
+            </div>
 
             {isLoading ? (
               <div className="text-center py-12">
@@ -332,107 +341,119 @@ const Index = () => {
               </div>
             ) : error ? (
               <div className="text-center py-12">
-                <p className="text-destructive">{error}</p>
+                <p className="text-destructive mb-4">{error}</p>
+                <button
+                  onClick={fetchProposals}
+                  className="px-4 py-2 bg-primary text-primary-foreground rounded-lg"
+                >
+                  Retry
+                </button>
               </div>
             ) : proposals.length === 0 ? (
               <div className="text-center py-12 bg-card border border-border rounded-xl">
                 <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                <p className="text-muted-foreground mb-4">No proposals yet</p>
-                {/* <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-lg font-medium hover:bg-primary/90 transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  Create Your First Proposal
-                </button> */}
+                <p className="text-muted-foreground">No proposals yet</p>
               </div>
             ) : (
               <div className="grid gap-4">
-                {proposals.map((proposal) => (
-                  <div
-                    key={proposal.id}
-                    className="bg-card border border-border rounded-xl p-6 flex items-center justify-between"
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold text-foreground">
-                          {proposal.client_name
-                            ? `Proposal for ${proposal.client_name}`
-                            : `Proposal #${proposal.id}`
-                          }
-                        </h3>
-                        {proposal.STATUS && (
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${proposal.STATUS === 'published'
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-yellow-100 text-yellow-800'
-                            }`}>
-                            {proposal.STATUS}
-                          </span>
+                <AnimatePresence mode="popLayout">
+                  {proposals.map((proposal) => (
+                    <motion.div
+                      key={proposal.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.95, y: -20 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, x: -100 }}
+                      transition={{ duration: 0.25 }}
+                      className="bg-card border border-border rounded-xl p-6 flex items-center justify-between"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="font-semibold text-foreground truncate">
+                            {proposal.client_name
+                              ? `Proposal for ${proposal.client_name}`
+                              : `Proposal #${proposal.id}`
+                            }
+                          </h3>
+                          {proposal.STATUS && (
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${proposal.STATUS === 'published'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                              }`}>
+                              {proposal.STATUS}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                          Created {new Date(proposal.created_at).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </p>
+                        {proposal.share_url && (
+                          <code className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded block truncate">
+                            {proposal.share_url}
+                          </code>
                         )}
                       </div>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        Created {new Date(proposal.created_at).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric'
-                        })}
-                      </p>
-                      {proposal.share_url && (
-                        <code className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
-                          {proposal.share_url}
-                        </code>
-                      )}
-                    </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => createProposalCopy(proposal)}
-                        disabled={isCreating}
-                        className="p-2 hover:bg-secondary rounded-lg transition-colors disabled:opacity-50"
-                        title="Create copy for new client"
-                      >
-                        {isCreating ? (
-                          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-                        ) : (
-                          <Plus className="w-5 text-red-600 h-5" />
-                        )}
-                      </button>
-
-                      {proposal.share_url && (
+                      <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                        {/* Create Copy */}
                         <button
-                          onClick={() => copyShareLink(proposal)}
-                          className="p-2 hover:bg-secondary rounded-lg transition-colors"
-                          title="Copy share link"
+                          onClick={() => createProposalCopy(proposal)}
+                          disabled={creatingId === proposal.id}
+                          className="p-2 hover:bg-secondary rounded-lg transition-colors disabled:opacity-50"
+                          title="Create copy"
                         >
-                          {copiedId === proposal.id ? (
-                            <Check className="w-5 h-5 text-green-600" />
+                          {creatingId === proposal.id ? (
+                            <Loader2 className="w-5 h-5 animate-spin text-primary" />
                           ) : (
-                            <Copy className="w-5 h-5 text-muted-foreground" />
+                            <Plus className="w-5 h-5 text-red-600" />
                           )}
                         </button>
-                      )}
 
-                      <Link
-                        to={`/proposal/${proposal.share_id || proposal.id}`}
-                        className="p-2 hover:bg-secondary rounded-lg transition-colors"
-                        title="View proposal"
-                      >
-                        <ExternalLink className="w-5 h-5 text-muted-foreground" />
-                      </Link>
+                        {/* Copy Link */}
+                        {proposal.share_url && (
+                          <button
+                            onClick={() => copyShareLink(proposal)}
+                            className="p-2 hover:bg-secondary rounded-lg transition-colors"
+                            title="Copy link"
+                          >
+                            {copiedId === proposal.id ? (
+                              <Check className="w-5 h-5 text-green-600" />
+                            ) : (
+                              <Copy className="w-5 h-5 text-muted-foreground" />
+                            )}
+                          </button>
+                        )}
 
-                      <button
-                        onClick={() => deleteProposal(proposal.id)}
-                        className="p-2 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete proposal"
-                      >
-                        <Trash2 className="w-5 h-5 text-destructive" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                        {/* View */}
+                        <Link
+                          to={`/proposal/${proposal.share_id || proposal.id}`}
+                          className="p-2 hover:bg-secondary rounded-lg transition-colors"
+                          title="View"
+                        >
+                          <ExternalLink className="w-5 h-5 text-muted-foreground" />
+                        </Link>
+
+                        {/* Delete */}
+                        <button
+                          onClick={() => deleteProposal(proposal.id)}
+                          className="p-2 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-5 h-5 text-destructive" />
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
               </div>
             )}
-          </motion.div>
+          </div>
         </div>
       </main>
 
@@ -443,117 +464,7 @@ const Index = () => {
         </div>
       </footer>
 
-      {/* Create Proposal Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-6 z-50">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-card border border-border rounded-xl p-6 w-full max-w-lg"
-          >
-            {newProposalUrl ? (
-              // Success state
-              <div className="text-center">
-                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Check className="w-8 h-8 text-green-600" />
-                </div>
-                <h2 className="text-xl font-bold text-foreground mb-2">Proposal Created!</h2>
-                <p className="text-muted-foreground mb-4">Share this link with your client:</p>
-                <div className="bg-muted rounded-lg p-3 flex items-center gap-2 mb-6">
-                  <code className="text-sm flex-1 truncate">{newProposalUrl}</code>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(newProposalUrl);
-                      alert("Copied to clipboard!");
-                    }}
-                    className="p-2 hover:bg-background rounded-md"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => {
-                      setShowCreateModal(false);
-                      setNewProposalUrl(null);
-                    }}
-                    className="flex-1 px-4 py-2 border border-border rounded-lg hover:bg-secondary transition-colors"
-                  >
-                    Close
-                  </button>
-                  <Link
-                    to={newProposalUrl.replace(window.location.origin, '')}
-                    className="flex-1 inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors"
-                  >
-                    View Proposal
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              // Form state
-              // <>
-              //   <h2 className="text-xl font-bold text-foreground mb-4">Create New Proposal</h2>
 
-              //   <div className="space-y-4">
-              //     <div>
-              //       <label className="block text-sm font-medium text-foreground mb-1">
-              //         Client Name (optional)
-              //       </label>
-              //       <input
-              //         type="text"
-              //         value={clientName}
-              //         onChange={(e) => setClientName(e.target.value)}
-              //         placeholder="e.g., Acme Corp"
-              //         className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-              //       />
-              //     </div>
-
-              //     <div>
-              //       <label className="block text-sm font-medium text-foreground mb-1">
-              //         Proposal Data *
-              //       </label>
-              //       <textarea
-              //         value={proposalData}
-              //         onChange={(e) => setProposalData(e.target.value)}
-              //         placeholder="Enter your proposal content (text or JSON)"
-              //         rows={6}
-              //         className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-              //       />
-              //     </div>
-              //   </div>
-
-              //   <div className="flex gap-3 mt-6">
-              //     <button
-              //       onClick={() => setShowCreateModal(false)}
-              //       className="flex-1 px-4 py-2 border border-border rounded-lg hover:bg-secondary transition-colors"
-              //     >
-              //       Cancel
-              //     </button>
-              //     <button
-              //       onClick={createProposal}
-              //       disabled={isCreating || !proposalData.trim()}
-              //       className="flex-1 inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-              //     >
-              //       {isCreating ? (
-              //         <>
-              //           <Loader2 className="w-4 h-4 animate-spin" />
-              //           Creating...
-              //         </>
-              //       ) : (
-              //         <>
-              //           <Plus className="w-4 h-4" />
-              //           Create Proposal
-              //         </>
-              //       )}
-              //     </button>
-              //   </div>
-              // </>
-              <div></div>
-            )}
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 };
