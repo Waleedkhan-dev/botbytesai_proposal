@@ -65,6 +65,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
       .from("PROPOSAL")
       .update({
         share_id: shareId,
+        share_url: generateShareUrl(shareId),
         // ❌ DON'T store share_url - it will always be wrong in different environments
       })
       .eq("id", proposal.id)
