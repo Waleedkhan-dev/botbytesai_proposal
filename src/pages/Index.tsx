@@ -47,42 +47,43 @@ const Index = () => {
   };
 
   // ✅ Auto-generate share link for proposals that don't have one
-  const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal> => {
-    // If proposal already has share_id and share_url, return as-is
-    if (proposal.share_id && proposal.share_url) {
+// ✅ Auto-generate share link for proposals that don't have one
+const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal> => {
+  // ✅ ONLY check share_id - ignore share_url completely
+  if (proposal.share_id) {
+    // Just regenerate the URL dynamically
+    return withDynamicShareUrl(proposal);
+  }
+
+  // Generate new share_id only
+  const shareId = crypto.randomUUID();
+
+  console.log(`🔗 Auto-generating share_id for proposal #${proposal.id}`);
+
+  try {
+    const { data, error } = await supabase
+      .from("PROPOSAL")
+      .update({
+        share_id: shareId,
+        // ❌ DON'T store share_url - it will always be wrong in different environments
+      })
+      .eq("id", proposal.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error(`❌ Error generating share link for #${proposal.id}:`, error);
       return proposal;
     }
 
-    // Generate new share link
-    const shareId = crypto.randomUUID();
-    const shareUrl = generateShareUrl(shareId);
-
-    console.log(`🔗 Auto-generating share link for proposal #${proposal.id}`);
-
-    try {
-      const { data, error } = await supabase
-        .from("PROPOSAL")
-        .update({
-          share_id: shareId ,
-          share_url: shareUrl,
-        })
-        .eq("id", proposal.id)
-        .select("*")
-        .single();
-
-      if (error) {
-        console.error(`❌ Error generating share link for #${proposal.id}:`, error);
-        return proposal; // Return original if update fails
-      }
-
-      console.log(`✅ Share link generated for proposal #${proposal.id}:`, shareUrl);
-      // ✅ Return with dynamically generated share_url (not from DB)
-      return { ...data, share_url: shareUrl } as Proposal;
-    } catch (err) {
-      console.error(`❌ Error:`, err);
-      return proposal;
-    }
-  }, []);
+    console.log(`✅ Share ID generated for proposal #${proposal.id}`);
+    // ✅ Return with dynamically generated share_url
+    return withDynamicShareUrl(data as Proposal);
+  } catch (err) {
+    console.error(`❌ Error:`, err);
+    return proposal;
+  }
+}, []);
 
   // Initial fetch
   const fetchProposals = useCallback(async () => {
