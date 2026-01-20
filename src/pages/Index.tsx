@@ -11,9 +11,12 @@ interface Proposal {
   "PROPOSAL DATA": string | null;
   STATUS: string | null;
   share_id: string | null;
-  share_url: string | null; // This will be dynamically generated, not from DB
+  share_url: string | null;
   client_name: string | null;
 }
+
+// ✅ HARDCODE YOUR PRODUCTION URL HERE
+const PRODUCTION_URL = "https://botbytesai-proposal.vercel.app";
 
 const Index = () => {
   const [isLoading, setIsLoading] = useState(true);
@@ -29,41 +32,28 @@ const Index = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [newProposalUrl, setNewProposalUrl] = useState<string | null>(null);
 
-  // ✅ ALWAYS generate URL dynamically based on current origin
+  // ✅ ALWAYS use production URL for database storage
   const generateShareUrl = (shareId: string): string => {
-    const baseUrl = window.location.origin;
-    return `${baseUrl}/proposal/${shareId}`;
+    return `${PRODUCTION_URL}/proposal/${shareId}`;
   };
 
-  // ✅ Dynamically regenerate share URL based on current origin
-  const withDynamicShareUrl = useCallback((proposal: Proposal): Proposal => {
-    if (proposal.share_id) {
-      return {
-        ...proposal,
-        share_url: generateShareUrl(proposal.share_id),
-      };
-    }
-    return proposal;
-  }, []);
-
-  // ✅ Auto-generate share_id for proposals that don't have one
+  // ✅ Auto-generate share link for proposals that don't have one
   const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal> => {
-    // If proposal already has share_id, just regenerate URL dynamically
-    if (proposal.share_id) {
-      return withDynamicShareUrl(proposal);
+    if (proposal.share_id && proposal.share_url) {
+      return proposal;
     }
 
-    // Generate new share_id only (NOT share_url!)
-    const shareId = crypto.randomUUID();
+    const shareId = proposal.share_id || crypto.randomUUID();
+    const shareUrl = generateShareUrl(shareId);
 
-    console.log(`🔗 Auto-generating share_id for proposal #${proposal.id}`);
+    console.log(`🔗 Auto-generating share link for proposal #${proposal.id}`);
 
     try {
       const { data, error } = await supabase
         .from("PROPOSAL")
         .update({
           share_id: shareId,
-          // ❌ REMOVED: share_url - never store this!
+          share_url: shareUrl,  // ✅ Now always production URL
         })
         .eq("id", proposal.id)
         .select("*")
@@ -74,14 +64,13 @@ const Index = () => {
         return proposal;
       }
 
-      console.log(`✅ Share ID generated for proposal #${proposal.id}`);
-      // ✅ Return with dynamically generated share_url
-      return withDynamicShareUrl(data as Proposal);
+      console.log(`✅ Share link generated for proposal #${proposal.id}:`, shareUrl);
+      return data as Proposal;
     } catch (err) {
       console.error(`❌ Error:`, err);
       return proposal;
     }
-  }, [withDynamicShareUrl]);
+  }, []);
 
   // Initial fetch
   const fetchProposals = useCallback(async () => {
@@ -98,23 +87,19 @@ const Index = () => {
         setProposals([]);
       } else {
         console.log("✅ Proposals fetched:", data?.length);
-        // ✅ Regenerate all share URLs dynamically based on current origin
-        const proposalsWithDynamicUrls = (data || []).map(withDynamicShareUrl);
-        setProposals(proposalsWithDynamicUrls);
+        setProposals(data || []);
       }
     } catch (err: any) {
       console.error("❌ Error fetching:", err.message);
       setError(err.message);
     }
     setIsLoading(false);
-  }, [withDynamicShareUrl]);
+  }, []);
 
-  // ✅ REALTIME SUBSCRIPTION - Auto-updates without refresh
+  // ✅ REALTIME SUBSCRIPTION
   useEffect(() => {
-    // Initial fetch
     fetchProposals();
 
-    // Subscribe to realtime changes
     const channel = supabase
       .channel('proposals-realtime')
       .on(
@@ -128,18 +113,12 @@ const Index = () => {
           console.log('✅ REALTIME INSERT:', payload.new);
           let newProposal = payload.new as Proposal;
 
-          // ✅ AUTO-GENERATE share_id if missing (for n8n-created proposals)
-          if (!newProposal.share_id) {
-            console.log('🔄 New proposal missing share_id, generating...');
+          if (!newProposal.share_id || !newProposal.share_url) {
+            console.log('🔄 New proposal missing share link, generating...');
             newProposal = await ensureShareLink(newProposal);
-          } else {
-            // ✅ Regenerate share URL with current origin
-            newProposal = withDynamicShareUrl(newProposal);
           }
 
-          // Add new proposal to the top of the list
           setProposals((prev) => {
-            // Avoid duplicates
             if (prev.some(p => p.id === newProposal.id)) return prev;
             return [newProposal, ...prev];
           });
@@ -155,11 +134,8 @@ const Index = () => {
         (payload) => {
           console.log('✅ REALTIME UPDATE:', payload.new);
           const updatedProposal = payload.new as Proposal;
-          // ✅ Regenerate share URL with current origin
-          const proposalWithDynamicUrl = withDynamicShareUrl(updatedProposal);
-          // Update the proposal in the list
           setProposals((prev) =>
-            prev.map((p) => (p.id === proposalWithDynamicUrl.id ? proposalWithDynamicUrl : p))
+            prev.map((p) => (p.id === updatedProposal.id ? updatedProposal : p))
           );
         }
       )
@@ -173,7 +149,6 @@ const Index = () => {
         (payload) => {
           console.log('✅ REALTIME DELETE:', payload.old);
           const deletedId = (payload.old as Proposal).id;
-          // Remove from list
           setProposals((prev) => prev.filter((p) => p.id !== deletedId));
         }
       )
@@ -181,12 +156,11 @@ const Index = () => {
         console.log('📡 Realtime subscription status:', status);
       });
 
-    // Cleanup subscription on unmount
     return () => {
       console.log('🔌 Unsubscribing from realtime');
       supabase.removeChannel(channel);
     };
-  }, [fetchProposals, ensureShareLink, withDynamicShareUrl]);
+  }, [fetchProposals, ensureShareLink]);
 
   // ✅ N8N WEBHOOK TRIGGER
   useEffect(() => {
@@ -227,7 +201,6 @@ const Index = () => {
     if (!result.isConfirmed) return;
 
     try {
-      // Optimistic update - remove immediately
       setProposals(prev => prev.filter(p => p.id !== id));
 
       const { error } = await supabase.from('PROPOSAL').delete().eq('id', id);
@@ -235,7 +208,7 @@ const Index = () => {
       if (error) {
         console.error('❌ Error deleting:', error.message);
         await Swal.fire({ icon: 'error', title: 'Delete failed', text: error.message });
-        fetchProposals(); // Revert on error
+        fetchProposals();
         return;
       }
 
@@ -262,10 +235,9 @@ const Index = () => {
 
     try {
       const shareId = crypto.randomUUID();
-      // ✅ Generate URL for display only (NOT for database!)
-      const shareUrl = generateShareUrl(shareId);
+      const shareUrl = generateShareUrl(shareId);  // ✅ Always production URL
 
-      console.log("📝 Creating proposal with share_id:", shareId);
+      console.log("📝 Creating proposal with:", { shareId, shareUrl });
 
       const { data, error } = await supabase
         .from("PROPOSAL")
@@ -275,7 +247,7 @@ const Index = () => {
           client_name: clientName || null,
           is_published: false,
           share_id: shareId,
-          // ❌ REMOVED: share_url - never store this!
+          share_url: shareUrl,  // ✅ Always production URL
         })
         .select("*")
         .single();
@@ -287,14 +259,11 @@ const Index = () => {
 
       console.log("✅ Proposal created:", data);
 
-      // ✅ Add with dynamically generated URL
-      const proposalWithUrl = withDynamicShareUrl(data as Proposal);
       setProposals(prev => {
-        if (prev.some(p => p.id === proposalWithUrl.id)) return prev;
-        return [proposalWithUrl, ...prev];
+        if (prev.some(p => p.id === data.id)) return prev;
+        return [data, ...prev];
       });
 
-      // ✅ Use dynamically generated URL for display
       setNewProposalUrl(shareUrl);
       setClientName("");
       setProposalData("");
@@ -311,10 +280,9 @@ const Index = () => {
     setIsCreating(false);
   };
 
-  // Generate missing share links for existing proposals
   const generateMissingLinks = async () => {
     try {
-      const proposalsWithoutLinks = proposals.filter(p => !p.share_id);
+      const proposalsWithoutLinks = proposals.filter(p => !p.share_id || !p.share_url);
 
       if (proposalsWithoutLinks.length === 0) {
         alert("All proposals have shareable links!");
@@ -325,12 +293,13 @@ const Index = () => {
 
       for (const proposal of proposalsWithoutLinks) {
         const shareId = crypto.randomUUID();
+        const shareUrl = generateShareUrl(shareId);  // ✅ Always production URL
 
         const { error } = await supabase
           .from("PROPOSAL")
           .update({
             share_id: shareId,
-            // ❌ REMOVED: share_url - never store this!
+            share_url: shareUrl,  // ✅ Always production URL
           })
           .eq("id", proposal.id);
 
@@ -341,7 +310,6 @@ const Index = () => {
         }
       }
 
-      // Refresh proposals
       await fetchProposals();
       alert(`✅ Generated links for ${proposalsWithoutLinks.length} proposals!`);
     } catch (err: any) {
@@ -355,8 +323,7 @@ const Index = () => {
 
     try {
       const shareId = crypto.randomUUID();
-      // ✅ Generate URL for display only
-      const shareUrl = generateShareUrl(shareId);
+      const shareUrl = generateShareUrl(shareId);  // ✅ Always production URL
 
       const { data, error } = await supabase
         .from("PROPOSAL")
@@ -366,7 +333,7 @@ const Index = () => {
           client_name: null,
           is_published: false,
           share_id: shareId,
-          // ❌ REMOVED: share_url - never store this!
+          share_url: shareUrl,  // ✅ Always production URL
         })
         .select("*")
         .single();
@@ -375,14 +342,11 @@ const Index = () => {
 
       console.log("✅ Copy created:", data);
 
-      // ✅ Add with dynamically generated URL
-      const proposalWithUrl = withDynamicShareUrl(data as Proposal);
       setProposals(prev => {
-        if (prev.some(p => p.id === proposalWithUrl.id)) return prev;
-        return [proposalWithUrl, ...prev];
+        if (prev.some(p => p.id === data.id)) return prev;
+        return [data, ...prev];
       });
 
-      // Copy to clipboard - use dynamically generated URL
       try {
         await navigator.clipboard.writeText(shareUrl);
         await Swal.fire({
@@ -411,11 +375,9 @@ const Index = () => {
   };
 
   const copyShareLink = async (proposal: Proposal) => {
-    if (proposal.share_id) {
+    if (proposal.share_url) {
       try {
-        // ✅ Always generate fresh URL from current origin
-        const shareUrl = generateShareUrl(proposal.share_id);
-        await navigator.clipboard.writeText(shareUrl);
+        await navigator.clipboard.writeText(proposal.share_url);
         setCopiedId(proposal.id);
         setTimeout(() => setCopiedId(null), 2000);
       } catch (err) {
@@ -437,7 +399,6 @@ const Index = () => {
               BOTBYTES
             </span>
           </div>
-          {/* Realtime indicator */}
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
             Live
@@ -475,7 +436,7 @@ const Index = () => {
           <div>
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-foreground">Your Proposals</h2>
-              {proposals.some(p => !p.share_id) && (
+              {proposals.some(p => !p.share_id || !p.share_url) && (
                 <button
                   onClick={generateMissingLinks}
                   className="px-3 py-2 text-sm bg-yellow-100 text-yellow-800 rounded-lg hover:bg-yellow-200 transition-colors"
@@ -545,15 +506,14 @@ const Index = () => {
                             minute: '2-digit'
                           })}
                         </p>
-                        {proposal.share_id && (
+                        {proposal.share_url && (
                           <code className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded block truncate">
-                            {generateShareUrl(proposal.share_id)}
+                            {proposal.share_url}
                           </code>
                         )}
                       </div>
 
                       <div className="flex items-center gap-2 ml-4 flex-shrink-0">
-                        {/* Create Copy */}
                         <button
                           onClick={() => createProposalCopy(proposal)}
                           disabled={creatingId === proposal.id}
@@ -567,8 +527,7 @@ const Index = () => {
                           )}
                         </button>
 
-                        {/* Copy Link */}
-                        {proposal.share_id && (
+                        {proposal.share_url && (
                           <button
                             onClick={() => copyShareLink(proposal)}
                             className="p-2 hover:bg-secondary rounded-lg transition-colors"
@@ -582,7 +541,6 @@ const Index = () => {
                           </button>
                         )}
 
-                        {/* View */}
                         <Link
                           to={`/proposal/${proposal.share_id || proposal.id}`}
                           className="p-2 hover:bg-secondary rounded-lg transition-colors"
@@ -591,7 +549,6 @@ const Index = () => {
                           <ExternalLink className="w-5 h-5 text-muted-foreground" />
                         </Link>
 
-                        {/* Delete */}
                         <button
                           onClick={() => deleteProposal(proposal.id)}
                           className="p-2 hover:bg-red-50 rounded-lg transition-colors"
@@ -656,7 +613,7 @@ const Index = () => {
                     Close
                   </button>
                   <Link
-                    to={newProposalUrl.replace(window.location.origin, '')}
+                    to={newProposalUrl.replace(PRODUCTION_URL, '')}
                     className="flex-1 inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors"
                   >
                     View Proposal
