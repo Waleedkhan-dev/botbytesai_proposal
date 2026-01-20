@@ -50,24 +50,12 @@ export const createProposal = async (input: CreateProposalInput): Promise<{
     throw new Error(error.message);
   }
 
-  // Generate and update the share URL
+  // ✅ Generate share URL dynamically (NOT stored in DB to avoid localhost issues)
   const shareUrl = generateShareUrl(data.share_id);
-  
-  const { data: updatedData, error: updateError } = await supabase
-    .from("PROPOSAL")
-    .update({ share_url: shareUrl })
-    .eq("id", data.id)
-    .select("*")
-    .single();
 
-  if (updateError) {
-    console.error("❌ Error updating share URL:", updateError.message);
-    throw new Error(updateError.message);
-  }
-
-  console.log("✅ Proposal created:", updatedData);
+  console.log("✅ Proposal created:", data);
   return {
-    proposal: updatedData as Proposal,
+    proposal: { ...data, share_url: shareUrl } as Proposal,
     shareUrl,
   };
 };
@@ -109,23 +97,12 @@ export const createProposalCopy = async (
     throw new Error(copyError.message);
   }
 
-  // Generate and update the share URL
+  // ✅ Generate share URL dynamically (NOT stored in DB to avoid localhost issues)
   const shareUrl = generateShareUrl(copy.share_id);
-  
-  const { data: updatedCopy, error: updateError } = await supabase
-    .from("PROPOSAL")
-    .update({ share_url: shareUrl })
-    .eq("id", copy.id)
-    .select("*")
-    .single();
-
-  if (updateError) {
-    throw new Error(updateError.message);
-  }
 
   console.log("✅ Proposal copy created for client:", clientName);
   return {
-    proposal: updatedCopy as Proposal,
+    proposal: { ...copy, share_url: shareUrl } as Proposal,
     shareUrl,
   };
 };
@@ -136,9 +113,9 @@ export const createProposalCopy = async (
 export const publishProposal = async (proposalId: number): Promise<Proposal> => {
   const { data, error } = await supabase
     .from("PROPOSAL")
-    .update({ 
+    .update({
       is_published: true,
-      STATUS: "published" 
+      STATUS: "published"
     })
     .eq("id", proposalId)
     .select("*")

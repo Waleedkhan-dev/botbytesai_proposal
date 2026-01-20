@@ -35,6 +35,17 @@ const Index = () => {
     return `${baseUrl}/proposal/${shareId}`;
   };
 
+  // ✅ Dynamically regenerate share URL based on current origin (fixes localhost issue)
+  const withDynamicShareUrl = (proposal: Proposal): Proposal => {
+    if (proposal.share_id) {
+      return {
+        ...proposal,
+        share_url: generateShareUrl(proposal.share_id),
+      };
+    }
+    return proposal;
+  };
+
   // ✅ Auto-generate share link for proposals that don't have one
   const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal> => {
     // If proposal already has share_id and share_url, return as-is
@@ -53,7 +64,6 @@ const Index = () => {
         .from("PROPOSAL")
         .update({
           share_id: shareId,
-          share_url: shareUrl,
         })
         .eq("id", proposal.id)
         .select("*")
@@ -65,7 +75,8 @@ const Index = () => {
       }
 
       console.log(`✅ Share link generated for proposal #${proposal.id}:`, shareUrl);
-      return data as Proposal;
+      // ✅ Return with dynamically generated share_url (not from DB)
+      return { ...data, share_url: shareUrl } as Proposal;
     } catch (err) {
       console.error(`❌ Error:`, err);
       return proposal;
@@ -87,14 +98,16 @@ const Index = () => {
         setProposals([]);
       } else {
         console.log("✅ Proposals fetched:", data?.length);
-        setProposals(data || []);
+        // ✅ Regenerate all share URLs dynamically based on current origin
+        const proposalsWithDynamicUrls = (data || []).map(withDynamicShareUrl);
+        setProposals(proposalsWithDynamicUrls);
       }
     } catch (err: any) {
       console.error("❌ Error fetching:", err.message);
       setError(err.message);
     }
     setIsLoading(false);
-  }, []);
+  }, [withDynamicShareUrl]);
 
   // ✅ REALTIME SUBSCRIPTION - Auto-updates without refresh
   useEffect(() => {
@@ -119,6 +132,9 @@ const Index = () => {
           if (!newProposal.share_id || !newProposal.share_url) {
             console.log('🔄 New proposal missing share link, generating...');
             newProposal = await ensureShareLink(newProposal);
+          } else {
+            // ✅ Regenerate share URL with current origin
+            newProposal = withDynamicShareUrl(newProposal);
           }
 
           // Add new proposal to the top of the list
@@ -139,9 +155,11 @@ const Index = () => {
         (payload) => {
           console.log('✅ REALTIME UPDATE:', payload.new);
           const updatedProposal = payload.new as Proposal;
+          // ✅ Regenerate share URL with current origin
+          const proposalWithDynamicUrl = withDynamicShareUrl(updatedProposal);
           // Update the proposal in the list
           setProposals((prev) =>
-            prev.map((p) => (p.id === updatedProposal.id ? updatedProposal : p))
+            prev.map((p) => (p.id === proposalWithDynamicUrl.id ? proposalWithDynamicUrl : p))
           );
         }
       )
@@ -168,7 +186,7 @@ const Index = () => {
       console.log('🔌 Unsubscribing from realtime');
       supabase.removeChannel(channel);
     };
-  }, [fetchProposals, ensureShareLink]);
+  }, [fetchProposals, ensureShareLink, withDynamicShareUrl]);
 
   // ✅ N8N WEBHOOK TRIGGER - No page reload needed!
   useEffect(() => {
@@ -179,14 +197,14 @@ const Index = () => {
         const response = await fetch("https://bevvy-bullet.app.n8n.cloud/webhook/generate-proposal");
         const data = await response.json();
         console.log(" N8N Data:", data);
-        reloadTimer  = setTimeout(()=>{
+        reloadTimer = setTimeout(() => {
           window.location.reload();
-        },3 * 60 * 1000) 
+        }, 3 * 60 * 1000)
       } catch (error) {
         console.error("❌ n8n error:", error);
       }
     };
-    
+
     triggerN8NWebhook();
   }, []);
 
@@ -350,7 +368,7 @@ const Index = () => {
 
       console.log("✅ Copy created:", data);
 
-    
+
       setProposals(prev => {
         if (prev.some(p => p.id === data.id)) return prev;
         return [data, ...prev];

@@ -55,6 +55,12 @@ const ProposalPage = () => {
 
   const navigate = useNavigate();
 
+  // ✅ Generate dynamic share URL based on current origin (fixes localhost issue)
+  const generateShareUrl = (shareId: string): string => {
+    const baseUrl = window.location.origin;
+    return `${baseUrl}/proposal/${shareId}`;
+  };
+
   const fetchProposal = async () => {
     if (!id) {
       setError("No proposal ID provided");
@@ -93,7 +99,12 @@ const ProposalPage = () => {
       setProposal(null);
     } else {
       console.log("✅ Proposal fetched:", data);
-      setProposal(data);
+      // ✅ Regenerate share URL dynamically with current origin
+      const proposalWithDynamicUrl: Proposal = {
+        ...data,
+        share_url: data.share_id ? generateShareUrl(data.share_id) : null,
+      };
+      setProposal(proposalWithDynamicUrl);
       parseProposalIntoSlides(data["PROPOSAL DATA"]);
     }
 
@@ -284,7 +295,7 @@ const ProposalPage = () => {
       {/* Header */}
       <header className="border-b border-gray-200 px-6 py-4 bg-white sticky top-0 z-10">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-         
+
 
           <div className="flex items-center gap-3">
             {/* Slide indicator */}
@@ -324,7 +335,7 @@ const ProposalPage = () => {
               </button>
             )} */}
 
-          {/* /  <button
+            {/* /  <button
               onClick={deleteProposal}
               className="inline-flex items-center gap-2 bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors"
               title="Delete proposal"
@@ -333,13 +344,13 @@ const ProposalPage = () => {
               Delete
             </button> */}
           </div>
-           <Button
+          <Button
             onClick={handleBookMeeting}
             className="inline-flex items-center gap-2 text-white  from-violet-500 to-purple-600  transition-colors"
           >
-           
+
             Book a Meeting
-               <CalendarCheck className="w-5 h-5" />
+            <CalendarCheck className="w-5 h-5" />
           </Button>
         </div>
       </header>
