@@ -4,7 +4,6 @@ import { Link } from "react-router-dom";
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import Swal from 'sweetalert2';
-import { set } from "date-fns";
 
 interface Proposal {
   id: number;
@@ -12,7 +11,7 @@ interface Proposal {
   "PROPOSAL DATA": string | null;
   STATUS: string | null;
   share_id: string | null;
-  share_url: string | null;
+  share_url: string | null; // This will be dynamically generated, not from DB
   client_name: string | null;
 }
 
@@ -30,13 +29,14 @@ const Index = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [newProposalUrl, setNewProposalUrl] = useState<string | null>(null);
 
+  // ✅ ALWAYS generate URL dynamically based on current origin
   const generateShareUrl = (shareId: string): string => {
     const baseUrl = window.location.origin;
     return `${baseUrl}/proposal/${shareId}`;
   };
 
-  // ✅ Dynamically regenerate share URL based on current origin (fixes localhost issue)
-  const withDynamicShareUrl = (proposal: Proposal): Proposal => {
+  // ✅ Dynamically regenerate share URL based on current origin
+  const withDynamicShareUrl = useCallback((proposal: Proposal): Proposal => {
     if (proposal.share_id) {
       return {
         ...proposal,
@@ -44,47 +44,44 @@ const Index = () => {
       };
     }
     return proposal;
-  };
+  }, []);
 
-  // ✅ Auto-generate share link for proposals that don't have one
-// ✅ Auto-generate share link for proposals that don't have one
-const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal> => {
-  // ✅ ONLY check share_id - ignore share_url completely
-  if (proposal.share_id) {
-    // Just regenerate the URL dynamically
-    return withDynamicShareUrl(proposal);
-  }
-
-  // Generate new share_id only
-  const shareId = crypto.randomUUID();
-
-  console.log(`🔗 Auto-generating share_id for proposal #${proposal.id}`);
-
-  try {
-    const { data, error } = await supabase
-      .from("PROPOSAL")
-      .update({
-        share_id: shareId,
-        share_url: generateShareUrl(shareId),
-        // ❌ DON'T store share_url - it will always be wrong in different environments
-      })
-      .eq("id", proposal.id)
-      .select("*")
-      .single();
-
-    if (error) {
-      console.error(`❌ Error generating share link for #${proposal.id}:`, error);
-      return proposal;
+  // ✅ Auto-generate share_id for proposals that don't have one
+  const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal> => {
+    // If proposal already has share_id, just regenerate URL dynamically
+    if (proposal.share_id) {
+      return withDynamicShareUrl(proposal);
     }
 
-    console.log(`✅ Share ID generated for proposal #${proposal.id}`);
-    // ✅ Return with dynamically generated share_url
-    return withDynamicShareUrl(data as Proposal);
-  } catch (err) {
-    console.error(`❌ Error:`, err);
-    return proposal;
-  }
-}, []);
+    // Generate new share_id only (NOT share_url!)
+    const shareId = crypto.randomUUID();
+
+    console.log(`🔗 Auto-generating share_id for proposal #${proposal.id}`);
+
+    try {
+      const { data, error } = await supabase
+        .from("PROPOSAL")
+        .update({
+          share_id: shareId,
+          // ❌ REMOVED: share_url - never store this!
+        })
+        .eq("id", proposal.id)
+        .select("*")
+        .single();
+
+      if (error) {
+        console.error(`❌ Error generating share link for #${proposal.id}:`, error);
+        return proposal;
+      }
+
+      console.log(`✅ Share ID generated for proposal #${proposal.id}`);
+      // ✅ Return with dynamically generated share_url
+      return withDynamicShareUrl(data as Proposal);
+    } catch (err) {
+      console.error(`❌ Error:`, err);
+      return proposal;
+    }
+  }, [withDynamicShareUrl]);
 
   // Initial fetch
   const fetchProposals = useCallback(async () => {
@@ -131,9 +128,9 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
           console.log('✅ REALTIME INSERT:', payload.new);
           let newProposal = payload.new as Proposal;
 
-          // ✅ AUTO-GENERATE share link if missing (for n8n-created proposals)
-          if (!newProposal.share_id || !newProposal.share_url) {
-            console.log('🔄 New proposal missing share link, generating...');
+          // ✅ AUTO-GENERATE share_id if missing (for n8n-created proposals)
+          if (!newProposal.share_id) {
+            console.log('🔄 New proposal missing share_id, generating...');
             newProposal = await ensureShareLink(newProposal);
           } else {
             // ✅ Regenerate share URL with current origin
@@ -191,7 +188,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
     };
   }, [fetchProposals, ensureShareLink, withDynamicShareUrl]);
 
-  // ✅ N8N WEBHOOK TRIGGER - No page reload needed!
+  // ✅ N8N WEBHOOK TRIGGER
   useEffect(() => {
     let reloadTimer: NodeJS.Timeout;
     const triggerN8NWebhook = async () => {
@@ -199,16 +196,20 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
         console.log('🚀 Triggering n8n webhook...');
         const response = await fetch("https://bevvy-bullet.app.n8n.cloud/webhook/generate-proposal");
         const data = await response.json();
-        console.log(" N8N Data:", data);
+        console.log("N8N Data:", data);
         reloadTimer = setTimeout(() => {
           window.location.reload();
-        }, 3 * 60 * 1000)
+        }, 3 * 60 * 1000);
       } catch (error) {
         console.error("❌ n8n error:", error);
       }
     };
 
     triggerN8NWebhook();
+
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+    };
   }, []);
 
   const deleteProposal = async (id: number) => {
@@ -261,9 +262,10 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
 
     try {
       const shareId = crypto.randomUUID();
+      // ✅ Generate URL for display only (NOT for database!)
       const shareUrl = generateShareUrl(shareId);
 
-      console.log("📝 Creating proposal with:", { shareId, shareUrl });
+      console.log("📝 Creating proposal with share_id:", shareId);
 
       const { data, error } = await supabase
         .from("PROPOSAL")
@@ -273,7 +275,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
           client_name: clientName || null,
           is_published: false,
           share_id: shareId,
-          share_url: shareUrl,
+          // ❌ REMOVED: share_url - never store this!
         })
         .select("*")
         .single();
@@ -283,14 +285,16 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
         throw error;
       }
 
-      console.log("✅ Proposal created with link:", data);
+      console.log("✅ Proposal created:", data);
 
-      // Realtime will auto-add it, but we can also do optimistic update
+      // ✅ Add with dynamically generated URL
+      const proposalWithUrl = withDynamicShareUrl(data as Proposal);
       setProposals(prev => {
-        if (prev.some(p => p.id === data.id)) return prev;
-        return [data, ...prev];
+        if (prev.some(p => p.id === proposalWithUrl.id)) return prev;
+        return [proposalWithUrl, ...prev];
       });
 
+      // ✅ Use dynamically generated URL for display
       setNewProposalUrl(shareUrl);
       setClientName("");
       setProposalData("");
@@ -310,7 +314,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
   // Generate missing share links for existing proposals
   const generateMissingLinks = async () => {
     try {
-      const proposalsWithoutLinks = proposals.filter(p => !p.share_id || !p.share_url);
+      const proposalsWithoutLinks = proposals.filter(p => !p.share_id);
 
       if (proposalsWithoutLinks.length === 0) {
         alert("All proposals have shareable links!");
@@ -321,14 +325,12 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
 
       for (const proposal of proposalsWithoutLinks) {
         const shareId = crypto.randomUUID();
-        const shareUrl = generateShareUrl(shareId);
 
         const { error } = await supabase
           .from("PROPOSAL")
           .update({
             share_id: shareId,
-            share_url: shareUrl,
-           
+            // ❌ REMOVED: share_url - never store this!
           })
           .eq("id", proposal.id);
 
@@ -353,6 +355,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
 
     try {
       const shareId = crypto.randomUUID();
+      // ✅ Generate URL for display only
       const shareUrl = generateShareUrl(shareId);
 
       const { data, error } = await supabase
@@ -363,7 +366,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
           client_name: null,
           is_published: false,
           share_id: shareId,
-          share_url: shareUrl,
+          // ❌ REMOVED: share_url - never store this!
         })
         .select("*")
         .single();
@@ -372,13 +375,14 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
 
       console.log("✅ Copy created:", data);
 
-
+      // ✅ Add with dynamically generated URL
+      const proposalWithUrl = withDynamicShareUrl(data as Proposal);
       setProposals(prev => {
-        if (prev.some(p => p.id === data.id)) return prev;
-        return [data, ...prev];
+        if (prev.some(p => p.id === proposalWithUrl.id)) return prev;
+        return [proposalWithUrl, ...prev];
       });
 
-      // Copy to clipboard
+      // Copy to clipboard - use dynamically generated URL
       try {
         await navigator.clipboard.writeText(shareUrl);
         await Swal.fire({
@@ -407,9 +411,11 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
   };
 
   const copyShareLink = async (proposal: Proposal) => {
-    if (proposal.share_url) {
+    if (proposal.share_id) {
       try {
-        await navigator.clipboard.writeText(proposal.share_url);
+        // ✅ Always generate fresh URL from current origin
+        const shareUrl = generateShareUrl(proposal.share_id);
+        await navigator.clipboard.writeText(shareUrl);
         setCopiedId(proposal.id);
         setTimeout(() => setCopiedId(null), 2000);
       } catch (err) {
@@ -469,7 +475,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
           <div>
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-foreground">Your Proposals</h2>
-              {proposals.some(p => !p.share_id || !p.share_url) && (
+              {proposals.some(p => !p.share_id) && (
                 <button
                   onClick={generateMissingLinks}
                   className="px-3 py-2 text-sm bg-yellow-100 text-yellow-800 rounded-lg hover:bg-yellow-200 transition-colors"
@@ -539,9 +545,9 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
                             minute: '2-digit'
                           })}
                         </p>
-                        {proposal.share_url && (
+                        {proposal.share_id && (
                           <code className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded block truncate">
-                            {proposal.share_url}
+                            {generateShareUrl(proposal.share_id)}
                           </code>
                         )}
                       </div>
@@ -562,7 +568,7 @@ const ensureShareLink = useCallback(async (proposal: Proposal): Promise<Proposal
                         </button>
 
                         {/* Copy Link */}
-                        {proposal.share_url && (
+                        {proposal.share_id && (
                           <button
                             onClick={() => copyShareLink(proposal)}
                             className="p-2 hover:bg-secondary rounded-lg transition-colors"
