@@ -270,7 +270,6 @@ const Index = () => {
           client_name: clientName || null,
           is_published: false,
           share_id: shareId,
-          share_url: shareUrl,
         })
         .select("*")
         .single();
@@ -324,7 +323,6 @@ const Index = () => {
           .from("PROPOSAL")
           .update({
             share_id: shareId,
-            share_url: shareUrl,
           })
           .eq("id", proposal.id);
 
@@ -359,7 +357,6 @@ const Index = () => {
           client_name: null,
           is_published: false,
           share_id: shareId,
-          share_url: shareUrl,
         })
         .select("*")
         .single();
