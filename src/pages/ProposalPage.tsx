@@ -238,7 +238,7 @@ const ProposalPage = () => {
   };
 
   const handleBookMeeting = () => {
-    window.open("https://app.digitalmotives.agency/widget/booking/pu9ACl5nqxpqeVpo2e2q", "_blank");
+    window.open("https://calendar.app.google/MxGJokQVE2bp4uGt8", "_blank");
   };
 
   // Loading state
